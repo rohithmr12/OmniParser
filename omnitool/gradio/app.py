@@ -3,6 +3,8 @@ python app.py --windows_host_url localhost:8006 --omniparser_server_url localhos
 """
 
 import os
+from azure.identity import DefaultAzureCredential
+from openai import AzureOpenAI
 from datetime import datetime
 from enum import StrEnum
 from functools import partial
@@ -33,10 +35,10 @@ Type a message and press submit to start OmniTool. Press stop to pause, and pres
 '''
 
 def parse_arguments():
-
     parser = argparse.ArgumentParser(description="Gradio App")
     parser.add_argument("--windows_host_url", type=str, default='localhost:8006')
     parser.add_argument("--omniparser_server_url", type=str, default="localhost:8000")
+    parser.add_argument("--vnc_proxy", type=str, default="localhost:8006")
     return parser.parse_args()
 args = parse_arguments()
 
@@ -62,6 +64,14 @@ def setup_state(state):
         state["api_key"] = ""
     if "auth_validated" not in state:
         state["auth_validated"] = False
+    if "azure_api_type" not in state:
+        state["azure_api_type"] = "azure"
+    if "azure_api_version" not in state:
+        state["azure_api_version"] = os.getenv("AZURE_OPENAI_API_VERSION", "2024-02-15-preview")
+    if "azure_endpoint" not in state:
+        state["azure_endpoint"] = os.getenv("AZURE_OPENAI_ENDPOINT", "")
+    if "azure_deployment" not in state:
+        state["azure_deployment"] = os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME", "")
     if "responses" not in state:
         state["responses"] = {}
     if "tools" not in state:
@@ -82,6 +92,10 @@ def validate_auth(provider: APIProvider, api_key: str | None):
     if provider == APIProvider.ANTHROPIC:
         if not api_key:
             return "Enter your Anthropic API key to continue."
+        if not os.getenv("AZURE_OPENAI_ENDPOINT"):
+            return "Set AZURE_OPENAI_ENDPOINT environment variable."
+        if not os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME"):
+            return "Set AZURE_OPENAI_DEPLOYMENT_NAME environment variable."
     if provider == APIProvider.BEDROCK:
         import boto3
 
@@ -345,7 +359,7 @@ with gr.Blocks(theme=gr.themes.Default()) as demo:
             chatbot = gr.Chatbot(label="Chatbot History", autoscroll=True, height=580)
         with gr.Column(scale=3):
             iframe = gr.HTML(
-                f'<iframe src="http://{args.windows_host_url}/vnc.html?view_only=1&autoconnect=1&resize=scale" width="100%" height="580" allow="fullscreen"></iframe>',
+                f'<iframe src="http://{args.vnc_proxy}/vnc.html?view_only=1&autoconnect=1&resize=scale&proxy_host={args.windows_host_url}" width="100%" height="580" allow="fullscreen"></iframe>',
                 container=False,
                 elem_classes="no-padding"
             )
@@ -354,7 +368,11 @@ with gr.Blocks(theme=gr.themes.Default()) as demo:
         state["model"] = model_selection
         print(f"Model updated to: {state['model']}")
         
-        if model_selection == "claude-3-5-sonnet-20241022":
+        if "azure" in model_selection:
+            provider_choices = ["azure"]
+            state["provider"] = "azure"
+            state["api_key"] = os.getenv("AZURE_OPENAI_API_KEY", "")
+        elif model_selection == "claude-3-5-sonnet-20241022":
             provider_choices = [option.value for option in APIProvider if option.value != "openai"]
         elif model_selection in set(["omniparser + gpt-4o", "omniparser + o1", "omniparser + o3-mini", "omniparser + gpt-4o-orchestrated", "omniparser + o1-orchestrated", "omniparser + o3-mini-orchestrated"]):
             provider_choices = ["openai"]
@@ -423,4 +441,4 @@ with gr.Blocks(theme=gr.themes.Default()) as demo:
     stop_button.click(stop_app, [state], None)
     
 if __name__ == "__main__":
-    demo.launch(server_name="0.0.0.0", server_port=7888)
+    demo.launch(share=True,server_name="0.0.0.0", server_port=7888)
